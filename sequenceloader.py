@@ -42,6 +42,7 @@ def gather_info_sequence(sequence_dir, data_type):
 
     # Image_size
     if len(image_filenames) > 0:
+
         image = cv2.imread(next(iter(image_filenames.values())),
                            cv2.IMREAD_GRAYSCALE)
         image_size = image.shape
@@ -72,10 +73,10 @@ class SequenceLoader(object):
         self.seqs = os.listdir(data_dir)
         self.seqs.append(None)
         self.data_dir = data_dir
-        self.out_dir = self.__mk_output_dir__(data_dir, experiment_name)
+        self.out_dir = self.__mk_output_dir__(data_dir, experiment_name, data_type)
         self.data_type = data_type
 
-    def __mk_output_dir__(self, data_dir, results_dir):
+    def __mk_output_dir__(self, data_dir, results_dir, data_type):
         if '/' == data_dir[-1]:
             data_dir = data_dir[:-1]
 

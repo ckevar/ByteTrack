@@ -7,6 +7,8 @@ import argparse
 
 import os
 import cv2
+import time
+import torch
 
 # Minimal args for BYTETracker
 class Args(object):
@@ -20,35 +22,6 @@ class Args(object):
         self.track_buffer = track_buffer
         self.mot20 = mot20
 
-"""
-
-
-args = Args()
-tracker = BYTETracker(args, frame_rate=30)  # supply your video fps
-
-timer = Timer()
-num_frames = 1
-frame_width = 1240
-frame_height = 1080
-
-for frame_id in range(num_frames):
-    # Suppose you already have detections for this frame as numpy array:
-    # dets format: [[x1, y1, x2, y2, score], ...]
-    dets = np.array([
-        [100, 50, 200, 150, 0.9],
-        [400, 300, 500, 450, 0.85],
-    ])
-
-    # Update tracker
-    online_targets = tracker.update(dets, [frame_width, frame_height], [frame_width, frame_height])
-
-    # Get tracking results
-    for t in online_targets:
-        tlwh = t.tlwh        # top-left x, y, w, h
-        track_id = t.track_id
-        score = t.score
-        print(f"Frame {frame_id}: ID {track_id}, Box {tlwh}, Score {score:.2f}")
-"""
 
 def parse_args():
 
@@ -94,52 +67,65 @@ def load_detector(model_filename):
 
 
 def unwrap_detections_ltrb_confs(detections):
+    """
     confs = detections.boxes.conf.cpu().numpy()
     detections = detections.boxes.xyxy.cpu().numpy()
-    return detections, confs
+    """
 
+    confs = detections.boxes.conf.unsqueeze(1)
+    out = torch.cat([detections.boxes.xyxy, confs], dim=1)
+    return out.cpu()
+ 
+def store_results(output_file, results, data_type):
+    if "MOT17" == data_type:
+        save_format = "%d,%d,%.2f,%.2f,%.2f,%.2f,1,-1,-1,-1"
+    elif "KITTI" == data_type:
+        save_format = "%d %d pedestrian 0 0 -10 %.2f %.2f %.2f %.2f -10 -10 -10 -1000 -1000 -1000 -10"
+        results = np.array(results)
+        results[:, 4:6] += results[:, 2:4] # left-top-right-bottom: x1, y1, x2, y2
+    else:
+        raise ValueError(f"Dataset format --data_type={data_type} not supported.\n")
 
-total_et = 0
-total_frame = 0
+    fd = open(output_file, 'w')
+
+    for row in results:
+        print(save_format % (
+            row[0], row[1], row[2], row[3], row[4], row[5]), file=fd)
+    fd.close()
 
 def run(sequence, detector, targs):
-    total_et = 0
-    total_frame = 0
-
+    print(f"Processing sequence {sequence['sequence_name']}")
     frame_rate = (sequence["update_ms"] / 1000) if sequence["update_ms"] else 30
     tracker = BYTETracker(args, frame_rate=frame_rate)
     results = []
     total_et = 0
     total_frame = 0
+    frame_height, frame_width = sequence["image_size"]
 
-
-    for frame in sequence["image_filenames"]:
-        frame = cv2.imread(sequence["image_filenames"][frame], cv2.IMREAD_COLOR)
+    for frame_id in sequence["image_filenames"]:
+        frame = cv2.imread(sequence["image_filenames"][frame_id], cv2.IMREAD_COLOR)
         start_time = time.time()
 
         detections = detector(frame, verbose=False)[0]
+        detections = unwrap_detections_ltrb_confs(detections)
+        online_targets = tracker.update(detections, 
+                                        [frame_width, frame_height],
+                                        [frame_width, frame_height])
 
-        detections, confs = unwrap_detections_ltrb_confs(detections)
+        # Get tracking results
+        for t in online_targets:
+            tlwh = t.tlwh        # top-left x, y, w, h
+            score = t.score
+            results.append([
+                frame_id, t.track_id, tlwh[0], tlwh[1], tlwh[2], tlwh[3], score])
 
-       
-        """
-        start_time = time.time()
-
-        #detections = detector(frame, vebose)[0]
-        # TODO: unravels has to unravel x1, x2
-        #detections, confs = unravel_detections_confs(detections)
-
-        tracker.predict()
-        tracker.update(detections, sequence["image_size"], sequence["image_size"])
-
-        cv2.imshow("BYTETracker", frame)
-        if cv2.waitKey(int(sequence["update_ms"])) & 0xFF == ord('q'):
-            break
-        
-        """
-
-    cv2.destroyAllWindows()
-
+        total_et += time.time() - start_time
+        total_frame += 1
+    
+    print(f"Time elapsed: {total_et}, FPS: {total_frame/total_et}\n")
+    
+    # Store results.
+    store_results(sequence["output_file"], results, sequence["data_type"])
 
 
 if "__main__" == __name__:
@@ -159,7 +145,6 @@ if "__main__" == __name__:
 
     for seq in sequences.next_sequence():
         run(seq, detector, targs)
-        break
 
 
 
